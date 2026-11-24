@@ -40,7 +40,9 @@ test('good pull requests pass: scopes, breaking changes, fixes and resolves', ()
     ['fix: keep the file name', 'What\n\nfixes #12.'],
     ['feat!: new saved format', 'Resolves #3'],
     ['ci(release, format): tags', 'closes #1'],
-  ]) assert.deepEqual(checkPullRequest({ title, body }), [], title);
+    ['fix: keep the file name', 'Closes: #9'],
+    ['fix: keep the file name', 'Closes some-owner/some.repo#9'],
+  ]) assert.deepEqual(checkPullRequest({ title, body }), [], `${title} / ${body}`);
 });
 
 test('titles without a known type or a space after the colon fail', () => {
@@ -61,6 +63,7 @@ function recorder() {
   const gh = (args, input) => {
     calls.push({ args, input });
     if (args[0] === 'label' && args[1] === 'create') throw new Error('already exists');
+    if (args[0] === 'api' && args[1].endsWith('/comments')) return '101\n102\n'; // our earlier comments
     return '';
   };
   return { calls, gh, log: () => {} };
@@ -82,7 +85,8 @@ test('an issue that misses a section gets the label and one comment listing what
   assert.deepEqual(r.calls.map((c) => c.args.slice(0, 2).join(' ')), ['label create', 'issue edit', 'issue comment']);
   assert.ok(r.calls[1].args.includes('--add-label'));
   assert.match(r.calls[2].input, /- a "### Done when" section/);
-  assert.match(r.calls[2].input, /needs-format label goes away/);
+  assert.match(r.calls[2].input, /needs-format label and this comment go away/);
+  assert.match(r.calls[2].input, /<!-- github-steward-actions:format -->$/, 'marked, so it can be found and deleted');
 });
 
 test('an issue that already has the label gets no second comment', () => {
@@ -91,10 +95,14 @@ test('an issue that already has the label gets no second comment', () => {
   assert.deepEqual(r.calls, []);
 });
 
-test('a fixed issue loses the label; a fine issue without it is left alone', () => {
+test('a fixed issue loses the label and the action\'s own comments; a fine issue without it is left alone', () => {
   const r = recorder();
   run({ eventName: 'issues', event: issueEvent(ISSUE, ['needs-format']), repo: 'o/r', label: 'needs-format', ...r });
-  assert.deepEqual(r.calls.map((c) => c.args.at(-2)), ['--remove-label']);
+  assert.ok(r.calls[0].args.includes('--remove-label'));
+  const find = r.calls[1].args;
+  assert.equal(find[1], 'repos/o/r/issues/7/comments');
+  assert.match(find.at(-1), /contains\("<!-- github-steward-actions:format -->"\)/, 'only comments with the marker');
+  assert.deepEqual(r.calls.slice(2).map((c) => c.args.join(' ')), ['api -X DELETE repos/o/r/issues/comments/101', 'api -X DELETE repos/o/r/issues/comments/102']);
   const quiet = recorder();
   run({ eventName: 'issues', event: issueEvent(ISSUE), repo: 'o/r', label: 'needs-format', ...quiet });
   assert.deepEqual(quiet.calls, []);

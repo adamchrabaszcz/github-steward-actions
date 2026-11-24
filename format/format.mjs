@@ -14,8 +14,11 @@ import { pathToFileURL } from 'node:url';
 const REQUIRED = ['What and why', 'Done when'];
 const TYPES = ['feat', 'fix', 'perf', 'docs', 'ci', 'chore', 'test', 'refactor', 'style', 'build'];
 const TITLE = new RegExp(`^(${TYPES.join('|')})(\\([\\w ,./-]+\\))?!?: \\S`);
+// The forms GitHub closes an issue for: "Closes #9", "Closes: #9", "Closes owner/repo#9".
 // \b keeps "disclosed #9" from counting; the "#" keeps "Closes 9" from counting.
-const CLOSES = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?) +#\d+\b/i;
+const CLOSES = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?):? +([\w.-]+\/[\w.-]+)?#\d+\b/i;
+// Marks the action's own comment, so it can delete it once the issue is fixed.
+const MARKER = '<!-- github-steward-actions:format -->';
 
 // "## Heading" or "### Heading" sections of a body: heading -> text under it, trimmed.
 // "_No response_" is what an issue form writes for a field left empty.
@@ -48,7 +51,8 @@ function issueComment(problems, label) {
     'This issue is missing:',
     ...problems.map((p) => `- ${p}`),
     '',
-    `The format is in CONTRIBUTING.md ("Issues and pull requests"); the issue forms write it for you. The ${label} label goes away once it is fixed.`,
+    `The format is in CONTRIBUTING.md ("Issues and pull requests"); the issue forms write it for you. The ${label} label and this comment go away once it is fixed.`,
+    MARKER,
   ].join('\n');
 }
 
@@ -84,7 +88,9 @@ function run({ eventName, event, repo, label, gh, log = console.log }) {
     gh(['issue', 'comment', String(number), '--repo', repo, '--body-file', '-'], issueComment(problems, label));
   } else if (!problems.length && hasLabel) {
     gh(['issue', 'edit', String(number), '--repo', repo, '--remove-label', label]);
-    log('Format OK; label removed.');
+    const ours = gh(['api', `repos/${repo}/issues/${number}/comments`, '--paginate', '--jq', `.[] | select(.body | contains("${MARKER}")) | .id`]);
+    for (const id of String(ours || '').split('\n').filter(Boolean)) gh(['api', '-X', 'DELETE', `repos/${repo}/issues/comments/${id}`]);
+    log('Format OK; label and comment removed.');
   } else if (!problems.length) {
     log('Format OK.');
   }
