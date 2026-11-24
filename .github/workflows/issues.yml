@@ -1,0 +1,21 @@
+name: issues
+
+# Work that takes several pull requests is a parent issue with a sub-issue per step; each pull
+# request closes its sub-issue (Closes #n), which GitHub does by itself. This closes the parent
+# once its last sub-issue is closed, with this repository's own action from this checkout.
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  close-parent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./close-parent
