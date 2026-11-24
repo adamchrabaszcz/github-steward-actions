@@ -1,0 +1,14 @@
+# Actions are pinned to commit SHAs (CONTRIBUTING.md, "Code conventions"); Dependabot proposes
+# updates as one grouped pull request a week that keeps the pins and updates the version
+# comments. The actions themselves use no other actions, so only the workflows are watched.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/"]
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

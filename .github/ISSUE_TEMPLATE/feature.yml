@@ -1,0 +1,30 @@
+name: Feature
+description: "A new action, input or behaviour, or a change to how one works"
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: "What should change, and why. Which action, and what callers would write in their workflow."
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: "A short checklist that says when this is finished, including its test."
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: blast
+    attributes:
+      label: Blast radius
+      description: "Optional. What else this touches or could break, and for whom (repositories calling the action)."
+  - type: input
+    id: parent
+    attributes:
+      label: Parent
+      description: "Optional. The parent issue when this is one step of bigger work (e.g. #12); also add it as a sub-issue there."
