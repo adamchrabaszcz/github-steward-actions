@@ -69,6 +69,7 @@ jobs:
 - Work that takes several pull requests is a parent issue with GitHub sub-issues, one per step. When the last open sub-issue closes, the parent closes too (as completed), with a comment naming that last one.
 - Then the same one level up, and so on: a parent that is itself the last step of a bigger issue closes that one too. Closing with the workflow's token starts no new workflow run, so the action walks up the chain itself (at most 10 levels).
 - A parent with open sub-issues, an already closed parent, or no parent: nothing happens. "Done" is GitHub's own sub-issue count (the progress shown on the parent).
+- A parent in **another repository** (GitHub allows sub-issues across repositories) is left open with a note: the workflow's token can only close issues in its own repository.
 - **Input:** `token` (default `github.token`). Needs no checkout.
 
 ## Versions
