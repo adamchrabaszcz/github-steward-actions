@@ -1,0 +1,15 @@
+name: Close parent issues
+description: >-
+  When an issue closes, closes its parent once every sub-issue of that parent is done, with a
+  comment naming the last one; then the same for the parent's parent.
+author: adamchrabaszcz
+inputs:
+  token:
+    description: "Token that reads sub-issues and closes the parent; needs `issues: write`."
+    default: ${{ github.token }}
+runs:
+  using: node24
+  main: close-parent.mjs
+branding:
+  icon: check-circle
+  color: green
