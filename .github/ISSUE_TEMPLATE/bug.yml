@@ -1,0 +1,30 @@
+name: Bug
+description: "An action does something it shouldn't, or fails"
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: "What happens, what should happen instead, and how to see it: the action and version, the event (issue, pull request, push), and the run's log if you have it."
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: "A short checklist that says when this is fixed, including a test that would have caught it."
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: blast
+    attributes:
+      label: Blast radius
+      description: "Optional. What else this touches or could break, and for whom (repositories calling the action)."
+  - type: input
+    id: parent
+    attributes:
+      label: Parent
+      description: "Optional. The parent issue when this is one step of bigger work (e.g. #12); also add it as a sub-issue there."
