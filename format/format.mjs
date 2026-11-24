@@ -14,9 +14,10 @@ import { pathToFileURL } from 'node:url';
 const REQUIRED = ['What and why', 'Done when'];
 const TYPES = ['feat', 'fix', 'perf', 'docs', 'ci', 'chore', 'test', 'refactor', 'style', 'build'];
 const TITLE = new RegExp(`^(${TYPES.join('|')})(\\([\\w ,./-]+\\))?!?: \\S`);
-// The forms GitHub closes an issue for: "Closes #9", "Closes: #9", "Closes owner/repo#9".
-// \b keeps "disclosed #9" from counting; the "#" keeps "Closes 9" from counting.
-const CLOSES = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?):? +([\w.-]+\/[\w.-]+)?#\d+\b/i;
+// The forms GitHub closes an issue for: "Closes #9", "Closes: #9", "Closes owner/repo#9",
+// "Closes https://github.com/owner/repo/issues/9". \b keeps "disclosed #9" from counting;
+// the "#" keeps "Closes 9" from counting.
+const CLOSES = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?):? +(([\w.-]+\/[\w.-]+)?#\d+\b|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+\b)/i;
 // Marks the action's own comment, so it can delete it once the issue is fixed.
 const MARKER = '<!-- github-steward-actions:format -->';
 
@@ -77,6 +78,12 @@ function run({ eventName, event, repo, label, gh, log = console.log }) {
   const { number, body, labels = [] } = event.issue;
   const problems = checkIssue(body);
   const hasLabel = labels.some((l) => l.name === label);
+  // The action's earlier comments: by a bot and carrying the marker, so a person who pastes
+  // the marker into their own comment doesn't lose it.
+  const deleteOurComments = () => {
+    const ids = gh(['api', `repos/${repo}/issues/${number}/comments`, '--paginate', '--jq', `.[] | select(.user.type == "Bot" and (.body | contains("${MARKER}"))) | .id`]);
+    for (const id of String(ids || '').split('\n').filter(Boolean)) gh(['api', '-X', 'DELETE', `repos/${repo}/issues/comments/${id}`]);
+  };
   for (const p of problems) log(`Missing: ${p}`);
   if (problems.length && !hasLabel) {
     try {
@@ -85,13 +92,12 @@ function run({ eventName, event, repo, label, gh, log = console.log }) {
       // it exists already
     }
     gh(['issue', 'edit', String(number), '--repo', repo, '--add-label', label]);
+    deleteOurComments(); // the label was removed by hand: replace the old list, don't add a second
     gh(['issue', 'comment', String(number), '--repo', repo, '--body-file', '-'], issueComment(problems, label));
-  } else if (!problems.length && hasLabel) {
-    gh(['issue', 'edit', String(number), '--repo', repo, '--remove-label', label]);
-    const ours = gh(['api', `repos/${repo}/issues/${number}/comments`, '--paginate', '--jq', `.[] | select(.body | contains("${MARKER}")) | .id`]);
-    for (const id of String(ours || '').split('\n').filter(Boolean)) gh(['api', '-X', 'DELETE', `repos/${repo}/issues/comments/${id}`]);
-    log('Format OK; label and comment removed.');
   } else if (!problems.length) {
+    // Also when the label was removed by hand before the fix: the old comment still goes.
+    if (hasLabel) gh(['issue', 'edit', String(number), '--repo', repo, '--remove-label', label]);
+    deleteOurComments();
     log('Format OK.');
   }
   return 0;

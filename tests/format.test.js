@@ -42,6 +42,7 @@ test('good pull requests pass: scopes, breaking changes, fixes and resolves', ()
     ['ci(release, format): tags', 'closes #1'],
     ['fix: keep the file name', 'Closes: #9'],
     ['fix: keep the file name', 'Closes some-owner/some.repo#9'],
+    ['fix: keep the file name', 'Closes https://github.com/some-owner/some.repo/issues/9'],
   ]) assert.deepEqual(checkPullRequest({ title, body }), [], `${title} / ${body}`);
 });
 
@@ -52,22 +53,24 @@ test('titles without a known type or a space after the colon fail', () => {
 });
 
 test('descriptions without a real Closes line fail', () => {
-  for (const body of ['Part of #9', 'Closes 9', 'disclosed #9', '', null]) {
+  for (const body of ['Part of #9', 'Closes 9', 'disclosed #9', 'Closes https://example.com/o/r/issues/9', 'Closes https://github.com/o/r/pull/9', '', null]) {
     assert.equal(checkPullRequest({ title: 'feat: export', body }).length, 1, String(body));
   }
 });
 
-// run() with a recorded gh, so no test calls GitHub.
-function recorder() {
+// run() with a recorded gh, so no test calls GitHub. earlier: ids of the action's own earlier
+// comments, which the comment search returns.
+function recorder(earlier = []) {
   const calls = [];
   const gh = (args, input) => {
     calls.push({ args, input });
     if (args[0] === 'label' && args[1] === 'create') throw new Error('already exists');
-    if (args[0] === 'api' && args[1].endsWith('/comments')) return '101\n102\n'; // our earlier comments
+    if (args[0] === 'api' && args[1].endsWith('/comments')) return earlier.map((id) => id + '\n').join('');
     return '';
   };
   return { calls, gh, log: () => {} };
 }
+const shape = (r) => r.calls.map((c) => (c.args[0] === 'api' ? c.args.slice(0, c.args[1] === '-X' ? 4 : 2) : c.args.slice(0, 2)).join(' '));
 const issueEvent = (body, labels = []) => ({ issue: { number: 7, body, labels: labels.map((name) => ({ name })) } });
 
 test('a pull request missing both fails with both reported', () => {
@@ -82,11 +85,26 @@ test('an issue that misses a section gets the label and one comment listing what
   const r = recorder();
   const code = run({ eventName: 'issues', event: issueEvent('### What and why\nBecause.\n'), repo: 'o/r', label: 'needs-format', ...r });
   assert.equal(code, 0, 'issues are never blocked');
-  assert.deepEqual(r.calls.map((c) => c.args.slice(0, 2).join(' ')), ['label create', 'issue edit', 'issue comment']);
+  assert.deepEqual(shape(r), ['label create', 'issue edit', 'api repos/o/r/issues/7/comments', 'issue comment']);
   assert.ok(r.calls[1].args.includes('--add-label'));
-  assert.match(r.calls[2].input, /- a "### Done when" section/);
-  assert.match(r.calls[2].input, /needs-format label and this comment go away/);
-  assert.match(r.calls[2].input, /<!-- github-steward-actions:format -->$/, 'marked, so it can be found and deleted');
+  const comment = r.calls.at(-1).input;
+  assert.match(comment, /- a "### Done when" section/);
+  assert.match(comment, /needs-format label and this comment go away/);
+  assert.match(comment, /<!-- github-steward-actions:format -->$/, 'marked, so it can be found and deleted');
+});
+
+test('the label removed by hand on a still incomplete issue: the old comment is replaced, not doubled', () => {
+  const r = recorder([101]);
+  run({ eventName: 'issues', event: issueEvent('nothing'), repo: 'o/r', label: 'needs-format', ...r });
+  assert.deepEqual(shape(r), ['label create', 'issue edit', 'api repos/o/r/issues/7/comments', 'api -X DELETE repos/o/r/issues/comments/101', 'issue comment']);
+});
+
+test('only bot comments with the marker are found, so a pasted marker is safe', () => {
+  const r = recorder();
+  run({ eventName: 'issues', event: issueEvent(ISSUE), repo: 'o/r', label: 'needs-format', ...r });
+  const filter = r.calls.find((c) => c.args[0] === 'api').args.at(-1);
+  assert.match(filter, /\.user\.type == "Bot"/);
+  assert.match(filter, /contains\("<!-- github-steward-actions:format -->"\)/);
 });
 
 test('an issue that already has the label gets no second comment', () => {
@@ -95,17 +113,23 @@ test('an issue that already has the label gets no second comment', () => {
   assert.deepEqual(r.calls, []);
 });
 
-test('a fixed issue loses the label and the action\'s own comments; a fine issue without it is left alone', () => {
-  const r = recorder();
+test('a fixed issue loses the label and every comment of the action\'s', () => {
+  const r = recorder([101, 102]);
   run({ eventName: 'issues', event: issueEvent(ISSUE, ['needs-format']), repo: 'o/r', label: 'needs-format', ...r });
   assert.ok(r.calls[0].args.includes('--remove-label'));
-  const find = r.calls[1].args;
-  assert.equal(find[1], 'repos/o/r/issues/7/comments');
-  assert.match(find.at(-1), /contains\("<!-- github-steward-actions:format -->"\)/, 'only comments with the marker');
-  assert.deepEqual(r.calls.slice(2).map((c) => c.args.join(' ')), ['api -X DELETE repos/o/r/issues/comments/101', 'api -X DELETE repos/o/r/issues/comments/102']);
-  const quiet = recorder();
-  run({ eventName: 'issues', event: issueEvent(ISSUE), repo: 'o/r', label: 'needs-format', ...quiet });
-  assert.deepEqual(quiet.calls, []);
+  assert.deepEqual(shape(r).slice(1), ['api repos/o/r/issues/7/comments', 'api -X DELETE repos/o/r/issues/comments/101', 'api -X DELETE repos/o/r/issues/comments/102']);
+});
+
+test('a fixed issue whose label was removed by hand still loses the old comment', () => {
+  const r = recorder([101]);
+  run({ eventName: 'issues', event: issueEvent(ISSUE), repo: 'o/r', label: 'needs-format', ...r });
+  assert.deepEqual(shape(r), ['api repos/o/r/issues/7/comments', 'api -X DELETE repos/o/r/issues/comments/101']);
+});
+
+test('a fine issue with nothing to clean up only looks', () => {
+  const r = recorder();
+  run({ eventName: 'issues', event: issueEvent(ISSUE), repo: 'o/r', label: 'needs-format', ...r });
+  assert.deepEqual(shape(r), ['api repos/o/r/issues/7/comments']);
 });
 
 test('untrusted text reaches gh only as an argument or stdin, never in a command line', () => {
