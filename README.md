@@ -14,6 +14,39 @@ Each action is a small Node script with no dependencies, so a workflow needs not
 
 The actions are being built; each one's usage is added here as it lands.
 
+## `format`
+
+```yaml
+# .github/workflows/format.yml
+name: format
+on:
+  issues:
+    types: [opened, edited, reopened]
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+permissions:
+  contents: read
+jobs:
+  issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write # the label and the comment
+    steps:
+      - uses: adamchrabaszcz/github-steward-actions/format@<commit-sha> # vX.Y.Z
+  pull-request:
+    # Dependabot's pull requests have no issue to close.
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: adamchrabaszcz/github-steward-actions/format@<commit-sha> # vX.Y.Z
+```
+
+- **Issues** need a "What and why" and a "Done when" section (`##` or `###` headings) with something in them; an issue form field left empty (`_No response_`) counts as missing. Issues can't be blocked, so one that misses a section gets the label and one comment listing what's missing; once it's fixed, the label goes and the action deletes its comment (also when someone removed the label by hand). It only ever deletes its own comments: bot comments carrying its hidden marker. The issue never fails the run.
+- **Pull requests** need a Conventional Commit title (`feat`, `fix`, `perf`, `docs`, `ci`, `chore`, `test`, `refactor`, `style`, `build`, with an optional scope and `!`) and a line that closes an issue, in the forms GitHub closes issues for: `Closes #9`, `Closes: #9`, `Closes owner/repo#9` and `Closes https://github.com/owner/repo/issues/9`, with `Fixes` and `Resolves` too. Otherwise the check fails, with what's missing in the run's annotations. Make the job a required check to block merging.
+- **Inputs:** `token` (default `github.token`), `label` (default `needs-format`).
+- Needs no checkout.
+
 ## Versions
 
 Pin a release by its commit SHA, with the version in a comment, and let Dependabot propose updates:

@@ -1,0 +1,19 @@
+name: Issue and pull request format
+description: >-
+  Checks an issue or a pull request against the format: issues need "What and why" and
+  "Done when" (otherwise a label and a comment, removed once fixed); pull requests need a
+  Conventional Commit title and a "Closes #n" line, or the check fails.
+author: adamchrabaszcz
+inputs:
+  token:
+    description: "Token that labels and comments on issues; needs `issues: write` on issue events."
+    default: ${{ github.token }}
+  label:
+    description: The label for an issue that misses a section; created if it doesn't exist.
+    default: needs-format
+runs:
+  using: node24
+  main: format.mjs
+branding:
+  icon: check-square
+  color: green
