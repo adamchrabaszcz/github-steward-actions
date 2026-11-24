@@ -48,11 +48,24 @@ test('git log records split into subject and body', () => {
   assert.deepEqual(parseLog(log), [c('feat: a (#2)', 'Body line\n\nBREAKING CHANGE: x\n'), c('fix: b', '')]);
 });
 
-// A fake checkout and GitHub: tags, commits and what gh returns.
-function world({ lastTag = 'v1.2.3', log = '', subjects = '', closing = {}, milestones = [], comments = {} } = {}) {
+// A fake checkout and GitHub: tags, commits and what gh returns. newestTag: the newest release tag
+// in the repository (default: the last one reachable from the commit); laterTag: true when it's
+// on a later commit, not in this one's history. closing: pull request -> issues it closes, as
+// numbers (this repository) or "owner/repo#n" (another).
+function world({ lastTag = 'v1.2.3', newestTag, laterTag = false, log = '', subjects = '', closing = {}, milestones = [], comments = {} } = {}) {
   const calls = [];
+  const newest = newestTag ?? lastTag ?? '';
+  const ref = (x) => {
+    const m = String(x).match(/^(.+)\/(.+)#(\d+)$/);
+    return m ? { number: Number(m[3]), repository: { name: m[2], owner: { login: m[1] } } } : { number: x, repository: { name: 'r', owner: { login: 'o' } } };
+  };
   const git = (args) => {
     calls.push(['git', ...args]);
+    if (args[0] === 'tag') return newest ? newest + '\nv0.9.0\n' : '';
+    if (args[0] === 'merge-base') {
+      if (laterTag) throw new Error('exit 1');
+      return '';
+    }
     if (args[0] === 'describe') {
       if (!lastTag) throw new Error('no names found');
       return lastTag + '\n';
@@ -62,7 +75,7 @@ function world({ lastTag = 'v1.2.3', log = '', subjects = '', closing = {}, mile
   };
   const gh = (args) => {
     calls.push(['gh', ...args]);
-    if (args[0] === 'pr') return JSON.stringify({ closingIssuesReferences: (closing[args[2]] || []).map((number) => ({ number })) });
+    if (args[0] === 'pr') return JSON.stringify({ closingIssuesReferences: (closing[args[2]] || []).map(ref) });
     if (args[0] === 'api' && args[1].startsWith('repos/o/r/milestones?')) return JSON.stringify(milestones);
     if (args[0] === 'api' && args[1] === 'repos/o/r/milestones') return JSON.stringify({ number: 4, state: 'open' });
     if (args[0] === 'api' && /comments\?per_page/.test(args[1])) return JSON.stringify(comments[args[1].split('/')[4]] || []);
@@ -122,4 +135,27 @@ test('a failure while marking only warns: the release is out', () => {
   const result = run({ repo: 'o/r', sha: 'abc', first: '0.1.0', marks: true, git: w.git, gh, log: () => {}, warn: (m) => warnings.push(m) });
   assert.equal(result.released, true);
   assert.match(warnings[0], /Could not mark what v1\.2\.4 shipped: rate limited/);
+});
+
+test('an issue a pull request closes in another repository is not marked here', () => {
+  const w = world({ log: 'fix: a (#2)\x1f\x1e', subjects: 'fix: a (#2)\n', closing: { 2: [5, 'other-org/other-repo#6', 'O/R#7'] } });
+  run({ repo: 'o/r', sha: 'abc', first: '0.1.0', marks: true, git: w.git, gh: w.gh, log: () => {} });
+  const marked = w.gh_calls().filter((a) => a[1] === '-X' && /issues\/\d+$/.test(a[3])).map((a) => Number(a[3].split('/').pop()));
+  assert.deepEqual(marked, [2, 5, 7], '#6 belongs to another repository; O/R is this one');
+});
+
+test('runs finishing out of order: a later commit already released, so an earlier one is not', () => {
+  // CI for a later commit finished first and made v1.3.0, which contains this commit.
+  const w = world({ newestTag: 'v1.3.0', laterTag: true, log: 'fix: a (#2)\x1f\x1e' });
+  const lines = [];
+  assert.deepEqual(run({ repo: 'o/r', sha: 'old', first: '0.1.0', marks: true, git: w.git, gh: w.gh, log: (l) => lines.push(l) }), { released: false, version: '', tag: '' });
+  assert.deepEqual(w.gh_calls(), [], 'no release, no marks');
+  assert.match(lines[0], /v1\.3\.0 is on a later commit/);
+});
+
+test('a re-run on the commit that is already released makes nothing new', () => {
+  // The newest tag is on this very commit: it is its own ancestor, and nothing came after it.
+  const w = world({ lastTag: 'v1.3.0', log: '' });
+  assert.equal(run({ repo: 'o/r', sha: 'abc', first: '0.1.0', marks: true, git: w.git, gh: w.gh, log: () => {} }).released, false);
+  assert.deepEqual(w.gh_calls(), []);
 });

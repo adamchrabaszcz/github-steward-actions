@@ -109,11 +109,11 @@ jobs:
       #     GH_TOKEN: ${{ github.token }}
 ```
 
-- **When:** after CI passes on a push to `main`, so only tested commits are released. Every merge to `main` is a candidate; nothing is released by hand.
+- **When:** after CI passes on a push to `main`, so only tested commits are released. Every merge to `main` is a candidate; nothing is released by hand. CI runs can finish out of order: when the newest release tag is already on a later commit, that release contains this one, and nothing is released.
 - **The version** comes from the Conventional Commits since the last `vX.Y.Z` tag. A breaking change (`!` after the type, or a `BREAKING CHANGE:` footer line) bumps the major number, `feat` the minor, `fix` and `perf` the patch. `docs`, `ci`, `chore`, `test`, `refactor`, `style` and `build` release nothing. With squash merges, each pull request's title decides.
 - **The first release** waits for the first `feat`, `fix`, `perf` or breaking change, and is `first-version` (default `0.1.0`).
 - **The release:** a `vX.Y.Z` tag on the commit and a GitHub release with generated notes.
-- **The marks:** every pull request in the release (from squash `… (#12)` and merge `Merge pull request #12` subjects), and every issue those closed, gets the `vX.Y.Z` milestone and a "Released in vX.Y.Z" comment, once. A failure here only warns: the release is out already. `marks: false` turns it off.
+- **The marks:** every pull request in the release (from squash `… (#12)` and merge `Merge pull request #12` subjects), and every issue in this repository those closed, gets the `vX.Y.Z` milestone and a "Released in vX.Y.Z" comment, once. A failure here only warns: the release is out already. `marks: false` turns it off.
 - **Inputs:** `token` (default `github.token`), `sha` (default `github.sha`), `first-version` (default `0.1.0`), `marks` (default `true`).
 - **Outputs:** `released` (`true` or `false`), `version` (`1.4.0`), `tag` (`v1.4.0`).
 - Needs a checkout with full history and tags (`fetch-depth: 0`).

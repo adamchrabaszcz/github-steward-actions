@@ -63,7 +63,12 @@ function markShipped({ tag, repo, previous, sha, git, gh, log }) {
   const prs = pullRequestNumbers(git(['log', '--format=%s', previous ? `${previous}..${sha}` : sha]).split('\n'));
   const issues = new Set();
   for (const pr of prs) {
-    for (const i of JSON.parse(gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'closingIssuesReferences'])).closingIssuesReferences) issues.add(i.number);
+    for (const i of JSON.parse(gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'closingIssuesReferences'])).closingIssuesReferences) {
+      // A pull request can close an issue in another repository; the same number here is a
+      // different issue, so only this repository's are marked.
+      const where = i.repository ? `${i.repository.owner?.login}/${i.repository.name}` : '';
+      if (where.toLowerCase() === repo.toLowerCase()) issues.add(i.number);
+    }
   }
   const url = `https://github.com/${repo}/releases/tag/${tag}`;
   const line = releasedLine(tag, url);
@@ -81,8 +86,26 @@ function markShipped({ tag, repo, previous, sha, git, gh, log }) {
   log(`${tag}: ${prs.length} pull requests, ${issues.size} issues marked.`);
 }
 
+// git merge-base --is-ancestor answers with its exit code; a non-zero one throws.
+function isAncestor(git, tag, sha) {
+  try {
+    git(['merge-base', '--is-ancestor', tag, sha]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Returns { released, version, tag }.
 function run({ repo, sha, first, marks, git, gh, log = console.log, warn = (m) => console.log(`::warning::${m}`) }) {
+  // CI runs can finish out of order: when the newest release tag is on a later commit, that
+  // release already contains this one. Releasing it now would tag an older commit after a newer
+  // version, or reuse one.
+  const newest = git(['tag', '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname']).split('\n')[0].trim();
+  if (newest && !isAncestor(git, newest, sha)) {
+    log(`Nothing to release: ${newest} is on a later commit and already contains this one.`);
+    return { released: false, version: '', tag: '' };
+  }
   let lastTag = null;
   try {
     lastTag = git(['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*.[0-9]*.[0-9]*', sha]).trim() || null;
