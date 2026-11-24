@@ -72,45 +72,42 @@ function markShipped({ tag, repo, previous, sha, git, gh, log }) {
   }
   const url = `https://github.com/${repo}/releases/tag/${tag}`;
   const line = releasedLine(tag, url);
-  // Made open so things can be added to it, then closed: it has shipped.
-  const existing = JSON.parse(gh(['api', `repos/${repo}/milestones?state=all&per_page=100`])).find((m) => m.title === tag);
-  const milestone = existing || JSON.parse(gh(['api', `repos/${repo}/milestones`, '-f', `title=${tag}`, '-f', `description=${url}`]));
+  // Made open so things can be added to it, then closed: it has shipped. --paginate with a jq
+  // filter reads every page, so a repository with more than 100 milestones or comments works.
+  const found = jsonLines(gh(['api', '--paginate', `repos/${repo}/milestones?state=all&per_page=100`, '--jq', `.[] | select(.title == ${JSON.stringify(tag)}) | {number, state}`]));
+  const milestone = found[0] || JSON.parse(gh(['api', `repos/${repo}/milestones`, '-f', `title=${tag}`, '-f', `description=${url}`]));
   if (milestone.state === 'closed') gh(['api', '-X', 'PATCH', `repos/${repo}/milestones/${milestone.number}`, '-f', 'state=open']);
   const numbers = [...prs, ...[...issues].filter((n) => !prs.includes(n)).sort((a, b) => a - b)];
   for (const n of numbers) {
     gh(['api', '-X', 'PATCH', `repos/${repo}/issues/${n}`, '-F', `milestone=${milestone.number}`]); // issues and pull requests alike
-    const comments = JSON.parse(gh(['api', `repos/${repo}/issues/${n}/comments?per_page=100`]));
-    if (!comments.some((c) => String(c.body).includes(line))) gh(['api', `repos/${repo}/issues/${n}/comments`, '-f', `body=${line}`]);
+    const already = String(gh(['api', '--paginate', `repos/${repo}/issues/${n}/comments?per_page=100`, '--jq', `.[] | select(.body | contains(${JSON.stringify(line)})) | .id`])).trim();
+    if (!already) gh(['api', `repos/${repo}/issues/${n}/comments`, '-f', `body=${line}`]);
   }
   gh(['api', '-X', 'PATCH', `repos/${repo}/milestones/${milestone.number}`, '-f', 'state=closed']);
   log(`${tag}: ${prs.length} pull requests, ${issues.size} issues marked.`);
 }
 
-// git merge-base --is-ancestor answers with its exit code; a non-zero one throws.
-function isAncestor(git, tag, sha) {
-  try {
-    git(['merge-base', '--is-ancestor', tag, sha]);
-    return true;
-  } catch {
-    return false;
-  }
+// gh --jq prints one JSON value per line.
+const jsonLines = (text) => String(text || '').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+
+// Release tags only: exactly vX.Y.Z, newest first. A tag like v2.0.0-rc.1 is left out.
+function releaseTags(git, ...args) {
+  return git(['tag', '--list', 'v*', '--sort=-v:refname', ...args])
+    .split('\n')
+    .map((t) => t.trim())
+    .filter((t) => VERSION.test(t.slice(1)) && t.startsWith('v'));
 }
 
 // Returns { released, version, tag }.
 function run({ repo, sha, first, marks, git, gh, log = console.log, warn = (m) => console.log(`::warning::${m}`) }) {
-  // CI runs can finish out of order: when the newest release tag is on a later commit, that
-  // release already contains this one. Releasing it now would tag an older commit after a newer
-  // version, or reuse one.
-  const newest = git(['tag', '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname']).split('\n')[0].trim();
-  if (newest && !isAncestor(git, newest, sha)) {
+  // The last release this commit contains, and the newest in the repository. When they differ,
+  // a later commit's CI finished first and its release already contains this one: releasing
+  // now would tag an older commit after a newer version, or reuse one.
+  const lastTag = releaseTags(git, '--merged', sha)[0] || null;
+  const newest = releaseTags(git)[0] || null;
+  if (newest && newest !== lastTag) {
     log(`Nothing to release: ${newest} is on a later commit and already contains this one.`);
     return { released: false, version: '', tag: '' };
-  }
-  let lastTag = null;
-  try {
-    lastTag = git(['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*.[0-9]*.[0-9]*', sha]).trim() || null;
-  } catch {
-    // no release yet
   }
   const commits = parseLog(git(['log', '--no-merges', '--format=%s%x1f%b%x1e', lastTag ? `${lastTag}..${sha}` : sha]));
   const version = nextVersion(lastTag ? lastTag.slice(1) : null, commits, first);

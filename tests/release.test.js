@@ -48,37 +48,40 @@ test('git log records split into subject and body', () => {
   assert.deepEqual(parseLog(log), [c('feat: a (#2)', 'Body line\n\nBREAKING CHANGE: x\n'), c('fix: b', '')]);
 });
 
-// A fake checkout and GitHub: tags, commits and what gh returns. newestTag: the newest release tag
-// in the repository (default: the last one reachable from the commit); laterTag: true when it's
-// on a later commit, not in this one's history. closing: pull request -> issues it closes, as
-// numbers (this repository) or "owner/repo#n" (another).
-function world({ lastTag = 'v1.2.3', newestTag, laterTag = false, log = '', subjects = '', closing = {}, milestones = [], comments = {} } = {}) {
+// A fake checkout and GitHub: tags, commits and what gh returns.
+// - merged: the tags this commit contains, newest first (lastTag is a shortcut for one);
+//   later: tags only on later commits. git tag --list returns them, newest first, pre-releases
+//   included, as git would.
+// - closing: pull request -> issues it closes, as numbers (this repository) or "owner/repo#n".
+// - milestones, comments: what the repository has; the fake applies the jq filter's intent
+//   (the milestone with that title, the comments containing the line).
+function world({ lastTag = 'v1.2.3', merged, later = [], log = '', subjects = '', closing = {}, milestones = [], comments = {} } = {}) {
   const calls = [];
-  const newest = newestTag ?? lastTag ?? '';
+  const reachable = merged ?? (lastTag ? [lastTag] : []);
+  const byVersion = (tags) => [...tags].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
   const ref = (x) => {
     const m = String(x).match(/^(.+)\/(.+)#(\d+)$/);
     return m ? { number: Number(m[3]), repository: { name: m[2], owner: { login: m[1] } } } : { number: x, repository: { name: 'r', owner: { login: 'o' } } };
   };
   const git = (args) => {
     calls.push(['git', ...args]);
-    if (args[0] === 'tag') return newest ? newest + '\nv0.9.0\n' : '';
-    if (args[0] === 'merge-base') {
-      if (laterTag) throw new Error('exit 1');
-      return '';
-    }
-    if (args[0] === 'describe') {
-      if (!lastTag) throw new Error('no names found');
-      return lastTag + '\n';
-    }
+    if (args[0] === 'tag') return byVersion(args.includes('--merged') ? reachable : [...reachable, ...later]).join('\n') + '\n';
     if (args.includes('--no-merges')) return log;
     return subjects;
   };
   const gh = (args) => {
     calls.push(['gh', ...args]);
     if (args[0] === 'pr') return JSON.stringify({ closingIssuesReferences: (closing[args[2]] || []).map(ref) });
-    if (args[0] === 'api' && args[1].startsWith('repos/o/r/milestones?')) return JSON.stringify(milestones);
-    if (args[0] === 'api' && args[1] === 'repos/o/r/milestones') return JSON.stringify({ number: 4, state: 'open' });
-    if (args[0] === 'api' && /comments\?per_page/.test(args[1])) return JSON.stringify(comments[args[1].split('/')[4]] || []);
+    const path = args[1] === '--paginate' ? args[2] : args[1];
+    if (args[0] === 'api' && path.startsWith('repos/o/r/milestones?')) {
+      const title = JSON.parse(args.at(-1).match(/\.title == ("[^"]*")/)[1]);
+      return milestones.filter((m) => m.title === title).map((m) => JSON.stringify({ number: m.number, state: m.state }) + '\n').join('');
+    }
+    if (args[0] === 'api' && path === 'repos/o/r/milestones') return JSON.stringify({ number: 4, state: 'open' });
+    if (args[0] === 'api' && /comments\?per_page/.test(path)) {
+      const line = JSON.parse(args.at(-1).match(/contains\(("(?:[^"\\]|\\.)*")\)/)[1]);
+      return (comments[path.split('/')[4]] || []).filter((c) => c.body.includes(line)).map((c, i) => `${i + 1}\n`).join('');
+    }
     return '';
   };
   return { calls, git, gh, gh_calls: () => calls.filter((x) => x[0] === 'gh').map((x) => x.slice(1)) };
@@ -146,7 +149,7 @@ test('an issue a pull request closes in another repository is not marked here', 
 
 test('runs finishing out of order: a later commit already released, so an earlier one is not', () => {
   // CI for a later commit finished first and made v1.3.0, which contains this commit.
-  const w = world({ newestTag: 'v1.3.0', laterTag: true, log: 'fix: a (#2)\x1f\x1e' });
+  const w = world({ later: ['v1.3.0'], log: 'fix: a (#2)\x1f\x1e' });
   const lines = [];
   assert.deepEqual(run({ repo: 'o/r', sha: 'old', first: '0.1.0', marks: true, git: w.git, gh: w.gh, log: (l) => lines.push(l) }), { released: false, version: '', tag: '' });
   assert.deepEqual(w.gh_calls(), [], 'no release, no marks');
@@ -154,8 +157,23 @@ test('runs finishing out of order: a later commit already released, so an earlie
 });
 
 test('a re-run on the commit that is already released makes nothing new', () => {
-  // The newest tag is on this very commit: it is its own ancestor, and nothing came after it.
+  // The newest tag is on this very commit: this commit contains it, and nothing came after it.
   const w = world({ lastTag: 'v1.3.0', log: '' });
   assert.equal(run({ repo: 'o/r', sha: 'abc', first: '0.1.0', marks: true, git: w.git, gh: w.gh, log: () => {} }).released, false);
   assert.deepEqual(w.gh_calls(), []);
+});
+
+test('pre-release tags neither count as the last release nor stop one', () => {
+  // v1.3.0-rc.1 in this history and v2.0.0-rc.1 on a later commit: only v1.2.3 counts.
+  const w = world({ merged: ['v1.3.0-rc.1', 'v1.2.3'], later: ['v2.0.0-rc.1'], log: 'fix: a (#2)\x1f\x1e', subjects: 'fix: a (#2)\n' });
+  const result = run({ repo: 'o/r', sha: 'abc', first: '0.1.0', marks: false, git: w.git, gh: w.gh, log: () => {} });
+  assert.deepEqual(result, { released: true, version: '1.2.4', tag: 'v1.2.4' });
+});
+
+test('milestones and comments are read across every page, matched in the filter', () => {
+  const w = world({ log: 'fix: a (#2)\x1f\x1e', subjects: 'fix: a (#2)\n', milestones: [{ title: 'v1.2.4', number: 150, state: 'open' }] });
+  run({ repo: 'o/r', sha: 'abc', first: '0.1.0', marks: true, git: w.git, gh: w.gh, log: () => {} });
+  const reads = w.gh_calls().filter((a) => a[0] === 'api' && a[1] === '--paginate');
+  assert.equal(reads.length, 2, 'the milestones and #2\'s comments');
+  assert.ok(w.gh_calls().some((a) => a.join(' ') === 'api -X PATCH repos/o/r/issues/2 -F milestone=150'), 'milestone 150, past the first page, found');
 });
