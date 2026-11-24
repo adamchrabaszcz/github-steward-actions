@@ -1,0 +1,35 @@
+name: release
+
+# Once CI has passed on a push to main, this releases the commit with this repository's own
+# action from this checkout (./release), if the merges since the last release shipped
+# something. Callers pin a release's commit SHA, so a version here is what they can use.
+on:
+  workflow_run:
+    workflows: [test]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the tag and the release
+      issues: write # milestones and comments on the issues it shipped
+      pull-requests: write # milestones and comments on the pull requests it shipped
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0 # the tags and the commits since the last one
+      - uses: ./release
+        with:
+          sha: ${{ github.event.workflow_run.head_sha }}
+          first-version: 1.0.0

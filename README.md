@@ -12,8 +12,6 @@ Each action is a small Node script with no dependencies, so a workflow needs not
 | `close-parent` | When an issue closes, closes its parent once every sub-issue is done. |
 | `release` | After CI passes on `main`: the next version from the Conventional Commits since the last tag, a tag, a GitHub release, and a milestone and comment on every pull request and issue it shipped. |
 
-The actions are being built; each one's usage is added here as it lands.
-
 ## `format`
 
 ```yaml
@@ -71,6 +69,54 @@ jobs:
 - A parent with open sub-issues, an already closed parent, or no parent: nothing happens. "Done" is GitHub's own sub-issue count (the progress shown on the parent).
 - A parent in **another repository** (GitHub allows sub-issues across repositories) is left open with a note: the workflow's token can only close issues in its own repository.
 - **Input:** `token` (default `github.token`). Needs no checkout.
+
+## `release`
+
+```yaml
+# .github/workflows/release.yml
+name: release
+on:
+  workflow_run:
+    workflows: [test] # your CI workflow's name
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the tag and the release
+      issues: write # milestones and comments on what shipped
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@<commit-sha> # vX.Y.Z
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0 # the tags and the commits since the last one
+      - id: release
+        uses: adamchrabaszcz/github-steward-actions/release@<commit-sha> # vX.Y.Z
+        with:
+          sha: ${{ github.event.workflow_run.head_sha }}
+      # Optional: attach a file to the release.
+      # - if: steps.release.outputs.released == 'true'
+      #   run: gh release upload "${{ steps.release.outputs.tag }}" dist/app.zip
+      #   env:
+      #     GH_TOKEN: ${{ github.token }}
+```
+
+- **When:** after CI passes on a push to `main`, so only tested commits are released. Every merge to `main` is a candidate; nothing is released by hand. CI runs can finish out of order: when the newest release tag is already on a later commit, that release contains this one, and nothing is released. With the `concurrency` group above, a run waiting behind another can be replaced by a newer one; the newer run releases a later commit, which contains the replaced run's commits, so nothing is left out.
+- **The version** comes from the Conventional Commits since the last `vX.Y.Z` tag. Only exact `vX.Y.Z` tags count; a pre-release tag such as `v2.0.0-rc.1` is ignored. A breaking change (`!` after the type, or a `BREAKING CHANGE:` footer line) bumps the major number, `feat` the minor, `fix` and `perf` the patch. `docs`, `ci`, `chore`, `test`, `refactor`, `style` and `build` release nothing. With squash merges, each pull request's title decides.
+- **The first release** waits for the first `feat`, `fix`, `perf` or breaking change, and is `first-version` (default `0.1.0`).
+- **The release:** a `vX.Y.Z` tag on the commit and a GitHub release with generated notes.
+- **The marks:** every pull request in the release (from squash `… (#12)` and merge `Merge pull request #12` subjects), and every issue in this repository those closed, gets the `vX.Y.Z` milestone and a "Released in vX.Y.Z" comment, once. A failure here only warns: the release is out already. `marks: false` turns it off.
+- **Inputs:** `token` (default `github.token`), `sha` (default `github.sha`), `first-version` (default `0.1.0`), `marks` (default `true`).
+- **Outputs:** `released` (`true` or `false`), `version` (`1.4.0`), `tag` (`v1.4.0`).
+- Needs a checkout with full history and tags (`fetch-depth: 0`).
 
 ## Versions
 

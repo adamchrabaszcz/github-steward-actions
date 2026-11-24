@@ -1,0 +1,32 @@
+name: Release from Conventional Commits
+description: >-
+  Tags the commit and publishes a GitHub release when the Conventional Commits since the last
+  vX.Y.Z tag shipped something (breaking → major, feat → minor, fix/perf → patch), then gives
+  every pull request and issue it shipped the version's milestone and a "Released in" comment.
+author: adamchrabaszcz
+inputs:
+  token:
+    description: "Token that creates the release and marks pull requests and issues; needs `contents: write`, `issues: write` and `pull-requests: write`."
+    default: ${{ github.token }}
+  sha:
+    description: The commit to release; in a workflow_run workflow, the run's head_sha.
+    default: ${{ github.sha }}
+  first-version:
+    description: The version of the first release, when there's no vX.Y.Z tag yet.
+    default: 0.1.0
+  marks:
+    description: Whether to give what shipped the milestone and the comment (true or false).
+    default: "true"
+outputs:
+  released:
+    description: "\"true\" when a release was made."
+  version:
+    description: The version released, e.g. 1.4.0 (empty when none).
+  tag:
+    description: The tag released, e.g. v1.4.0 (empty when none).
+runs:
+  using: node24
+  main: release.mjs
+branding:
+  icon: tag
+  color: green
