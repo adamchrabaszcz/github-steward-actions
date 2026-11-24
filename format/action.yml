@@ -6,7 +6,7 @@ description: >-
 author: adamchrabaszcz
 inputs:
   token:
-    description: Token that labels and comments on issues; needs `issues: write` on issue events.
+    description: "Token that labels and comments on issues; needs `issues: write` on issue events."
     default: ${{ github.token }}
   label:
     description: The label for an issue that misses a section; created if it doesn't exist.
